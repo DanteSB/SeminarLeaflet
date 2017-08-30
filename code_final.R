@@ -1,0 +1,246 @@
+#Aviv Eilat 201403235
+#Dante Birger 302943147
+# loading packages
+library(rgdal)
+library(sp)
+library(ggmap)
+library(tibble)
+library(dplyr)
+library(DMwR)
+library(tidyverse)
+library(ggplot2)
+library(rgeos)
+library(reshape)
+library(leaflet)
+library(RColorBrewer)
+
+
+# Data reading
+dat = read.csv("streets_prices_joined.csv", stringsAsFactors = FALSE)
+tipat_halav = read.csv("immigrants_tipat_halav.csv", stringsAsFactors = FALSE)
+quarters = readOGR(dsn = ".", layer = "quarters_en")
+
+# Geocoding
+dat$address = paste0(dat$name_en, ", Tel Aviv")
+geocode_dat = geocode(dat$address, override_limit = TRUE)
+dat = cbind(dat, geocode_dat)
+
+tipat_halav$address = paste0(tipat_halav$address, ", Tel Aviv")
+geocode_station = geocode(tipat_halav$address, override_limit = TRUE)
+tipat_halav = cbind(tipat_halav, geocode_station)
+
+# K-means inputation of missing values in price data
+knnoutput = knnImputation(data = dat[, c(5, 7, 8, 10, 11)], k = 10, meth = "weighAvg")
+
+dat$new_apt_price_15 = knnoutput$new_apt_price_15
+dat$sec_hand_price_16 = knnoutput$sec_hand_price_16
+dat$new_apt_price_16 = knnoutput$new_apt_price_16
+dat$sec_hand_price_17 = knnoutput$sec_hand_price_17
+dat$new_apt_price_17 = knnoutput$new_apt_price_17
+
+# Data Manipulation
+tipat_halav$diff = (tipat_halav$X2017 - tipat_halav$X2015)
+
+tipat_halav_gather = tipat_halav %>% 
+  gather('X2015', 'X2016', 'X2017', key = "year", value = "cases")
+
+dat_sum_means = dat %>% 
+  summarise(
+    sec_hand_mean_15 = mean(sec_hand_price_15),
+    new_apt_mean_15 = mean(new_apt_price_15),
+    sec_hand_mean_16 = mean(sec_hand_price_16),
+    new_apt_mean_16 = mean(new_apt_price_16),
+    sec_hand_mean_17 = mean(sec_hand_price_17),
+    new_apt_mean_17 = mean(new_apt_price_17)
+  )
+
+dat_sum_means = melt(dat_sum_means)
+dat_sum_means$year = c(rep(2015, 2), rep(2016, 2), rep(2017, 2))
+
+dat = dat %>% 
+  group_by(name_en) %>% 
+  mutate(new_apt_diff = round(new_apt_price_17 - new_apt_price_15),
+         sec_hand_diff = round(sec_hand_price_17 - sec_hand_price_15),
+         new_apt_mean = (new_apt_price_15 + new_apt_price_16 + new_apt_price_17)/3,
+         sec_hand_mean = (sec_hand_price_15 + sec_hand_price_16 + sec_hand_price_17)/3)
+
+
+dat$mean_num_deals = rowMeans(dat[, c(3, 6, 9)])
+
+dat$sum_deals = rowSums(dat[, c(3, 6, 9)])
+
+# Spatial attribution
+dat_pnt = dat
+coordinates(dat_pnt) = ~ lon + lat
+proj4string(dat_pnt) = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+common.crs = CRS(proj4string(dat_pnt))
+quarters = spTransform(quarters, common.crs)
+
+colnames(dat_pnt@data) = colnames(dat[,c(1:12, 15:20)])
+
+tipat_halav_pnt = tipat_halav
+coordinates(tipat_halav_pnt) = ~ lon + lat
+proj4string(tipat_halav_pnt) = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+tipat_halav_pnt = spTransform(tipat_halav_pnt, common.crs)
+
+join_sec_15 = over(quarters, dat_pnt[, "sec_hand_price_15"], fn = mean)
+join_new_15 = over(quarters, dat_pnt[, "new_apt_price_15"], fn = mean)
+join_sec_16 = over(quarters, dat_pnt[, "sec_hand_price_16"], fn = mean)
+join_new_16 = over(quarters, dat_pnt[, "new_apt_price_16"], fn = mean)
+join_sec_17 = over(quarters, dat_pnt[, "sec_hand_price_17"], fn = mean)
+join_new_17 = over(quarters, dat_pnt[, "new_apt_price_17"], fn = mean)
+quarters@data = cbind(quarters@data, join_new_15, join_sec_15, join_sec_16, join_new_16, join_sec_17, join_new_17)
+rm(join_sec_15,join_new_15,join_sec_16,join_new_16,join_sec_17,join_new_17)
+
+join.X2015 = over(quarters, tipat_halav_pnt[,"X2015"], fn = mean)
+join.X2016 = over(quarters, tipat_halav_pnt[,"X2016"], fn = mean)
+join.X2017 = over(quarters, tipat_halav_pnt[,"X2017"], fn = mean)
+quarters@data = cbind(quarters@data, join.X2015, join.X2016, join.X2017)
+rm(join.X2015, join.X2016, join.X2017)
+
+quarters_df = as.data.frame(quarters)
+
+quarters_df = quarters_df %>% 
+  group_by(oidminhala) %>% 
+  mutate(new_apt_diff = new_apt_price_17 - new_apt_price_15,
+         sec_hand_diff = round(sec_hand_price_17 - sec_hand_price_15),
+         new_apt_mean = (new_apt_price_15 + new_apt_price_16 + new_apt_price_17)/3,
+         sec_hand_mean = (sec_hand_price_15 + sec_hand_price_16 + sec_hand_price_17)/3,
+         tipat_diff = X2017 - X2015,
+         tipat_mean = (X2015 + X2016 + X2017)/3)
+
+sub_quarters = as.data.frame(quarters_df[, c(1,4,16:17)])
+
+sub_quarters_gather = sub_quarters %>% 
+  gather('new_apt_mean','sec_hand_mean' , key = "variable", value = "prices")
+
+# Data visualization (plotting)
+tipat_halav_plot = ggplot(data = tipat_halav_gather, aes(x = station, y = cases, fill = year), na.rm = TRUE) +
+  geom_bar(position = "dodge", stat = "identity") +
+  theme(axis.text.x = element_text(angle = 45, size = 10, hjust = 1, vjust = 1)) +
+  scale_y_continuous(breaks = seq(0, 1700, by = 200)) +
+  labs(title = "Cases of immigrant families treated in Tipat Halav stations, 2015-2017")
+tipat_halav_plot
+
+prices_bar_plot = ggplot(data = dat_sum_means, aes(x = year, y = value, fill = value, group = variable)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_continuous(low = "orange", high = "red") +
+  labs(title = "Second hand and new apartment prices, 2015-2017",
+       x = "Second hand and new apartments, year", y = "Price") +
+  theme_minimal()
+prices_bar_plot
+
+price_quarters_plot = ggplot(data = sub_quarters_gather, aes(x=name_en, y = prices, fill = prices, group = variable)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  theme(axis.text.x = element_text(angle = 45, size = 10, hjust = 1, vjust = 1)) +
+  scale_fill_continuous(low = "yellow", high = "darkgreen") +
+  labs(title = "Prices per quarters", x = "Quarter", y = "Price")
+price_quarters_plot
+
+# Data visualization (mapping)
+prices_map = get_map(geocode_dat, zoom = 12)
+ggm_deals = ggmap(prices_map) +
+  geom_point(data = dat, aes(x = lon, y = lat, colour = mean_num_deals)) +
+  scale_color_gradient(low = "green", high = "darkblue", name = "Mean number of deals") +
+  labs(title = "Mean number of deals between 2015-2017, by street") 
+ggm_deals
+
+stations_map = get_map(geocode_station, zoom = 12)
+stations_ggmap = ggmap(stations_map) +
+  geom_point(aes(x = lon, y = lat, color = cases), data = tipat_halav_gather, size = 3) +
+  scale_color_continuous(low = "orange", high = "red") +
+  facet_wrap(~ year) +
+  labs(title = "Number of immigrant cases treated in Tipat Halav stations, 2015-2017")
+stations_ggmap
+
+# Let's take it up a notch with some leaflet
+qrt_centroids = gCentroid(quarters, byid=T)
+qrt_centroids$names = cbind(quarters[,4])
+qrt_centroids = data.frame(qrt_centroids)
+
+pal = colorNumeric(rev(brewer.pal(11, "RdYlBu")), domain = dat$sum_deals)
+pal2 = colorNumeric(brewer.pal(5,"YlOrRd"), domain = tipat_halav$diff)
+pal3 = colorNumeric(brewer.pal(5,"YlOrRd"), domain = quarters_df$new_apt_diff)
+pal4 = colorNumeric(brewer.pal(5,"YlOrRd"), domain = quarters_df$sec_hand_diff)
+
+leaflet_points = leaflet() %>% 
+  addProviderTiles("OpenStreetMap.Mapnik") %>% 
+  addCircles(data = dat_pnt,
+             radius = sqrt((dat_pnt$new_apt_diff)/7),
+             fillColor = ~pal(sum_deals), fillOpacity = 0.65) %>% 
+  addLegend(position = "bottomright", title = "Number of deals & Price differences, 2015-2017",
+            pal = pal, values = dat_pnt$sum_deals)
+leaflet_points
+
+
+
+leaflet_quarters1 = leaflet(quarters) %>% 
+  addTiles() %>% 
+  addPolygons(fillColor = ~pal2(tipat_halav$diff), fillOpacity = 0.3) %>%
+  addLegend(position = "bottomright", pal = pal2, values = tipat_halav$diff) %>% 
+  addCircles(data = tipat_halav_pnt, color = "black", opacity = 1) %>%
+  addLabelOnlyMarkers(quarters, lng =qrt_centroids$x, lat = qrt_centroids$y, label = qrt_centroids$name_en,
+                      labelOptions = labelOptions(noHide=T))
+leaflet_quarters1
+
+
+leaflet_quarters2 = leaflet(quarters) %>% 
+  addTiles() %>% 
+  addPolygons(fillColor = ~pal3(quarters_df$new_apt_diff), fillOpacity = 0.3) %>%
+  addLegend(position = "bottomright", pal = pal2, values = tipat_halav$diff) %>% 
+  addCircles(data = tipat_halav_pnt, color = "black", opacity = 1) %>%
+  addLabelOnlyMarkers(quarters, lng =qrt_centroids$x, lat = qrt_centroids$y, label = qrt_centroids$name_en,
+                      labelOptions = labelOptions(noHide=T))
+
+leaflet_quarters2
+
+
+leaflet_quarters3 = leaflet(quarters) %>% 
+  addTiles() %>% 
+  addPolygons(fillColor = ~pal4(quarters_df$sec_hand_diff), fillOpacity = 0.3) %>%
+  addLegend(position = "bottomright", pal = pal2, values = tipat_halav$diff) %>% 
+  addCircles(data = tipat_halav_pnt, color = "black", opacity = 1) %>%
+  addLabelOnlyMarkers(quarters, lng =qrt_centroids$x, lat = qrt_centroids$y, label = qrt_centroids$name_en,
+                      labelOptions = labelOptions(noHide=T))
+
+leaflet_quarters3
+
+
+
+
+
+
+# Statistical analysis
+apt_means_cor = cor.test(quarters_df$new_apt_mean, quarters_df$sec_hand_mean)
+apt_means_cor
+
+new_cor = cor.test(quarters_df$tipat_mean, quarters_df$new_apt_mean)
+new_cor
+
+sec_cor = cor.test(quarters_df$tipat_mean, quarters_df$sec_hand_mean)
+sec_cor
+
+fit_1 = lm(quarters_df$new_apt_mean ~ quarters_df$sec_hand_mean)
+fit_1
+
+fit_1_plot =  plot(quarters_df$new_apt_mean ~ quarters_df$sec_hand_mean,
+                   ylab = "Mean price, second hand", xlab = "Mean price, new apartment", 
+                   main = "Linear model - new & second hand mean prices")
+abline(fit_1, col = "red")
+
+fit_2 = lm(quarters_df$tipat_mean ~ quarters_df$new_apt_mean)
+fit_2
+
+fit_2_plot = plot(quarters_df$tipat_mean ~ quarters_df$new_apt_mean,
+                  ylab = "Mean price, new apartment", xlab = "Mean number of immigrant cases in Tipat Halav",
+                  main = "Linear Model - Tipat Halav cases & new apartment mean price")
+abline(fit_2, col = "red")
+
+fit_3 = lm(quarters_df$tipat_mean ~ quarters_df$sec_hand_mean)
+fit_3
+
+fit_3_plot = plot(quarters_df$tipat_mean ~ quarters_df$sec_hand_mean,
+                  ylab = "Mean price, second hand apartment", xlab = "Mean number of immigrant cases in Tipat Halav",
+                  main = "Linear model - Tipat Halav cases & second hand apartment mean price")
+abline(fit_3, col = "red")
+
