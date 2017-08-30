@@ -183,7 +183,7 @@ leaflet_points = leaflet() %>%
              fillColor = ~pal(sum_deals), fillOpacity = 0.65) %>% 
   addLegend(position = "bottomright", title = "Number of deals & Price differences, 2015-2017",
             pal = pal, values = dat_pnt$sum_deals)
-leaflet_points
+renderLeaflet({leaflet_points})
 
 
 ```
