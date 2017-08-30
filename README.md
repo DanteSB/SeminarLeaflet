@@ -216,8 +216,7 @@ leaflet_quarters2
 
 ```
 
-
-<pre class="r"><code>
+```{r leaflet4, echo = FALSE}
 leaflet_quarters3 = leaflet(quarters) %>% 
   addTiles() %>% 
   addPolygons(fillColor = ~pal4(quarters_df$sec_hand_diff), fillOpacity = 0.3) %>%
@@ -228,4 +227,4 @@ leaflet_quarters3 = leaflet(quarters) %>%
 
 leaflet_quarters3
 
-</code></pre>
+```
